@@ -275,9 +275,12 @@ namespace Unosquare.FFME.Commands
             ClearSeekCommands();
             SeekBlocksAvailable.Set();
 
-            // wait for any pending direct commands (unlikely)
+            // Wait for any pending direct commands (unlikely) AND for a
+            // pending close interrupt: the interrupt-close task runs outside
+            // PendingDirectCommand, so waiting on IsDirectCommandPending
+            // alone let disposal race it into a concurrent double-close.
             this.LogDebug(Aspects.EngineCommand, "Dispose is waiting for pending direct commands.");
-            while (IsDirectCommandPending)
+            while (IsDirectCommandPending || IsCloseInterruptPending)
                 Task.Delay(Constants.DefaultTimingPeriod).Wait();
 
             this.LogDebug(Aspects.EngineCommand, "Dispose is closing media.");

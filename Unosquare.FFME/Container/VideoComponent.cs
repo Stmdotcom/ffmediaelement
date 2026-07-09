@@ -87,7 +87,7 @@ internal sealed unsafe class VideoComponent : MediaComponent
     /// Point / nearest-neighbor is the default and it is the cheapest. This is by design as
     /// we don't change the dimensions of the image. We only do color conversion.
     /// </summary>
-    public static SwsFlags ScalerFlags { get; internal set; } = SwsFlags.SWS_POINT;
+    public static SwsFlags ScalerFlags { get; } = SwsFlags.SWS_POINT;
 
     /// <summary>
     /// Gets the base frame rate as reported by the stream component.

@@ -162,7 +162,37 @@ internal abstract class WorkerBase : IWorker
     /// <param name="alsoManaged">Determines if managed resources hsould also be released.</param>
     protected virtual void Dispose(bool alsoManaged)
     {
-        StopAsync().Wait(TimeSpan.FromSeconds(2));
+        // Request the stop inline and wait on the completion event
+        // directly. The previous implementation observed the stop via a
+        // pool task (StopAsync().Wait with a 2-second cap, result
+        // ignored); under ThreadPool saturation the observer task never
+        // got scheduled, the cap elapsed, and disposal proceeded while
+        // the worker was still executing a cycle — freeing state (codec
+        // contexts, COM buffers, sync primitives) out from under it.
+        lock (SyncLock)
+        {
+            if (!IsDisposed && !IsDisposing &&
+                (WorkerState == WorkerState.Running || WorkerState == WorkerState.Paused))
+            {
+                WantedStateCompleted.Reset();
+                WantedWorkerState = WorkerState.Stopped;
+                Interrupt();
+            }
+        }
+
+        // Wait outside the lock: the worker thread needs SyncLock inside
+        // TryBeginCycle to acknowledge the stop request. The deadline is a
+        // last-resort escape for a cycle that is itself blocked on the
+        // disposing thread; the disposal guards here and in TryBeginCycle /
+        // ExecuteCyle keep a straggler from touching disposed primitives
+        // in that case.
+        var deadline = Environment.TickCount64 + 5000;
+        while (!WantedStateCompleted.Wait(Constants.DefaultTimingPeriod))
+        {
+            Interrupt();
+            if (Environment.TickCount64 >= deadline)
+                break;
+        }
 
         lock (SyncLock)
         {
@@ -170,6 +200,11 @@ internal abstract class WorkerBase : IWorker
                 return;
 
             IsDisposing = true;
+
+            // Force the state to Stopped so any straggler cycle turns away
+            // in TryBeginCycle before the primitives below are destroyed.
+            WorkerState = WorkerState.Stopped;
+            WantedWorkerState = WorkerState.Stopped;
             WantedStateCompleted.Set();
             try { OnDisposing(); } catch { /* Ignore */ }
             CycleClock.Reset();
@@ -217,7 +252,8 @@ internal abstract class WorkerBase : IWorker
     /// <returns>True if a cycle should be executed.</returns>
     protected bool TryBeginCycle()
     {
-        if (WorkerState == WorkerState.Created || WorkerState == WorkerState.Stopped)
+        if (WorkerState == WorkerState.Created || WorkerState == WorkerState.Stopped ||
+            IsDisposed || IsDisposing)
             return false;
 
         LastCycleElapsed = CycleClock.Elapsed;
@@ -225,6 +261,12 @@ internal abstract class WorkerBase : IWorker
 
         lock (SyncLock)
         {
+            // Re-check under the lock: Dispose destroys WantedStateCompleted
+            // and a straggler setting it afterwards would throw on a
+            // dedicated worker thread with no handler above it.
+            if (IsDisposed || IsDisposing)
+                return false;
+
             WorkerState = WantedWorkerState;
             WantedStateCompleted.Set();
 
@@ -242,6 +284,10 @@ internal abstract class WorkerBase : IWorker
     {
         lock (SyncLock)
         {
+            // Don't touch (or hand out a token from) a disposed TokenSource.
+            if (IsDisposed || IsDisposing)
+                return;
+
             // Recreate the token source -- applies to cycle logic and delay
             var ts = TokenSource;
             if (ts.IsCancellationRequested)

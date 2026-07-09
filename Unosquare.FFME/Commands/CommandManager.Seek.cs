@@ -238,7 +238,7 @@
                     {
                         while (!MediaCore.Blocks[mt].IsFull && !ct.IsCancellationRequested)
                         {
-                            var frame = MediaCore.Container.Components[mt].ReceiveNextFrame();
+                            var frame = MediaCore.Container.ReceiveNextFrame(mt);
                             if (frame == null) break;
                             MediaCore.Blocks[mt].Add(frame, MediaCore.Container);
                             hasSeekBlocks = TrySignalBlocksAvailable(targetSeekMode, mainBlocks, targetPosition, hasSeekBlocks);
@@ -260,7 +260,7 @@
                         // Get the next frame
                         if (blocks.RangeEndTime.Ticks < targetPosition.Ticks || blocks.IsFull == false)
                         {
-                            blocks.Add(MediaCore.Container.Components[packetType].ReceiveNextFrame(), MediaCore.Container);
+                            blocks.Add(MediaCore.Container.ReceiveNextFrame(packetType), MediaCore.Container);
                             hasSeekBlocks = TrySignalBlocksAvailable(targetSeekMode, mainBlocks, targetPosition, hasSeekBlocks);
                         }
                     }

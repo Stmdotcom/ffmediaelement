@@ -37,6 +37,7 @@
         // Instance fields
         private readonly long DiagId = DirectSoundDiagnostics.NextInstanceId();
         private readonly EventWaitHandle CancelEvent = new EventWaitHandle(false, EventResetMode.ManualReset);
+        private readonly object ReleaseSyncRoot = new object();
 
         private readonly WaveFormat WaveFormat;
         private int SamplesTotalSize;
@@ -130,19 +131,32 @@
 
             DirectSoundDiagnostics.Log(DiagId, "Start.enter", "IsDisposed=" + IsDisposed);
 
-            InitializeDirectSound();
-            AudioBackBuffer.SetCurrentPosition(0);
-            NextSamplesWriteIndex = 0;
+            try
+            {
+                InitializeDirectSound();
+                AudioBackBuffer.SetCurrentPosition(0);
+                NextSamplesWriteIndex = 0;
 
-            // Give the buffer initial samples to work with
-            if (FeedBackBuffer(SamplesTotalSize) <= 0)
-                throw new InvalidOperationException($"Method {nameof(FeedBackBuffer)} could not write samples.");
+                // Give the buffer initial samples to work with
+                if (FeedBackBuffer(SamplesTotalSize) <= 0)
+                    throw new InvalidOperationException($"Method {nameof(FeedBackBuffer)} could not write samples.");
 
-            // Set the state to playing
-            PlaybackState = PlaybackState.Playing;
+                // Set the state to playing
+                PlaybackState = PlaybackState.Playing;
 
-            // Begin notifications on playback wait events
-            AudioBackBuffer.Play(0, 0, DirectSound.DirectSoundPlayFlags.Looping);
+                // Begin notifications on playback wait events
+                AudioBackBuffer.Play(0, 0, DirectSound.DirectSoundPlayFlags.Looping);
+            }
+            catch
+            {
+                // Release whatever partial COM state InitializeDirectSound
+                // managed to create before propagating the failure. Without
+                // this, the orphaned RCWs get Release()d on the finalizer
+                // thread at the next GC. The cycle thread does not exist yet,
+                // so releasing inline here is the owning-thread release.
+                ReleaseComObjects("Start.fail");
+                throw;
+            }
 
             StartAsync();
 
@@ -319,55 +333,51 @@
             PlaybackState = PlaybackState.Stopped;
             CancelEvent.Set(); // causes the WaitAny to exit
 
-            TryLogged(DiagId, "Stop.Render", () => AudioRenderBuffer.Stop());
-            TryLogged(DiagId, "ClearBack", ClearBackBuffer);
-            TryLogged(DiagId, "Stop.Back", () => AudioBackBuffer.Stop());
+            // The dsound COM objects are released at the tail of CycleLoop,
+            // on the thread that created and owns them. Only when playback
+            // never started (Start was not called, or it failed before the
+            // cycle thread existed) is there no owning thread; release
+            // inline in that case.
+            if (CycleThread == null)
+                ReleaseComObjects("OnDisposing");
 
-            // Release COM RCWs on the dispose thread instead of leaving them
-            // for the finalizer thread. FFME's original Dispose left these
-            // alive, so the CLR queued them for finalizer-thread Release on
-            // the next GC; under lifecycle churn the finalizer queue would
-            // burst-release many dsound RCWs in close succession and one of
-            // them would fault inside dsound's internal error path, killing
-            // the process. Order matters: children (buffers) before parent
-            // (driver). FinalReleaseComObject drops the ref count in one
-            // shot, so the RCW is removed from the finalizer queue entirely.
-            if (AudioBackBuffer != null)
-            {
-                TryLogged(DiagId, "Release.Back", () => Marshal.FinalReleaseComObject(AudioBackBuffer));
-                AudioBackBuffer = null;
-            }
-
-            if (AudioRenderBuffer != null)
-            {
-                TryLogged(DiagId, "Release.Render", () => Marshal.FinalReleaseComObject(AudioRenderBuffer));
-                AudioRenderBuffer = null;
-            }
-
-            if (DirectSoundDriver != null)
-            {
-                TryLogged(DiagId, "Release.Driver", () => Marshal.FinalReleaseComObject(DirectSoundDriver));
-                DirectSoundDriver = null;
-            }
-
-            var totalReleased = Interlocked.Increment(ref TotalReleased);
-
-            var exitMsg = "Driver=" + DescribeRcw(DirectSoundDriver)
-                + " Render=" + DescribeRcw(AudioRenderBuffer)
-                + " Back=" + DescribeRcw(AudioBackBuffer)
-                + " totalReleased=" + totalReleased;
-            DirectSoundDiagnostics.Log(DiagId, "OnDisposing.exit", exitMsg);
+            var cycleThreadState = CycleThread == null ? "null" : CycleThread.IsAlive ? "alive" : "exited";
+            DirectSoundDiagnostics.Log(DiagId, "OnDisposing.exit", "CycleThread=" + cycleThreadState);
         }
 
         /// <inheritdoc />
         protected override void Dispose(bool alsoManaged)
         {
+            if (IsDisposed)
+                return;
+
             DirectSoundDiagnostics.Log(DiagId, "Dispose.enter", "alsoManaged=" + alsoManaged);
+
+            // Wake the cycle thread out of its WaitAny immediately so the
+            // stop request issued by the base dispose gets acknowledged
+            // without waiting out the wait timeout.
+            CancelEvent.Set();
 
             base.Dispose(alsoManaged);
 
             if (alsoManaged)
             {
+                // The COM release runs at the tail of CycleLoop on the owning
+                // thread. Join it so the release has completed before the
+                // wait handles the loop may still be waiting on are disposed.
+                var cycleThread = CycleThread;
+                if (cycleThread != null && cycleThread != Thread.CurrentThread && cycleThread.IsAlive)
+                {
+                    if (!cycleThread.Join(TimeSpan.FromSeconds(5)))
+                    {
+                        // The cycle thread is stuck. Release inline as a last
+                        // resort — a cross-thread release now still beats a
+                        // finalizer-thread release later.
+                        DirectSoundDiagnostics.Log(DiagId, "Dispose.joinTimeout", "cycle thread did not exit within 5s; releasing COM inline");
+                        ReleaseComObjects("Dispose.joinTimeout");
+                    }
+                }
+
                 // Dispose DirectSound buffer wait handles
                 PlaybackEndedEventWaitHandle?.Dispose();
                 FrameStartEventWaitHandle?.Dispose();
@@ -463,6 +473,58 @@
             };
 
         /// <summary>
+        /// Stops the buffers and releases the three dsound COM RCWs. Safe to
+        /// call from multiple threads and more than once; each RCW is
+        /// released at most once. FFME's original Dispose left these RCWs
+        /// alive, so the CLR queued them for finalizer-thread Release on the
+        /// next GC; under lifecycle churn the finalizer queue would
+        /// burst-release many dsound RCWs in close succession and one of them
+        /// would fault inside dsound's internal error path, killing the
+        /// process. Order matters: children (buffers) before parent (driver).
+        /// FinalReleaseComObject drops the ref count in one shot, so the RCW
+        /// is removed from the finalizer queue entirely.
+        /// </summary>
+        /// <param name="site">Log-tag prefix identifying the calling path.</param>
+        private void ReleaseComObjects(string site)
+        {
+            lock (ReleaseSyncRoot)
+            {
+                if (AudioBackBuffer == null && AudioRenderBuffer == null && DirectSoundDriver == null)
+                    return;
+
+                TryLogged(DiagId, site + ".Stop.Render", () => AudioRenderBuffer?.Stop());
+                TryLogged(DiagId, site + ".ClearBack", ClearBackBuffer);
+                TryLogged(DiagId, site + ".Stop.Back", () => AudioBackBuffer?.Stop());
+
+                if (AudioBackBuffer != null)
+                {
+                    TryLogged(DiagId, site + ".Release.Back", () => Marshal.FinalReleaseComObject(AudioBackBuffer));
+                    AudioBackBuffer = null;
+                }
+
+                if (AudioRenderBuffer != null)
+                {
+                    TryLogged(DiagId, site + ".Release.Render", () => Marshal.FinalReleaseComObject(AudioRenderBuffer));
+                    AudioRenderBuffer = null;
+                }
+
+                if (DirectSoundDriver != null)
+                {
+                    TryLogged(DiagId, site + ".Release.Driver", () => Marshal.FinalReleaseComObject(DirectSoundDriver));
+                    DirectSoundDriver = null;
+                }
+
+                var totalReleased = Interlocked.Increment(ref TotalReleased);
+
+                var exitMsg = "Driver=" + DescribeRcw(DirectSoundDriver)
+                    + " Render=" + DescribeRcw(AudioRenderBuffer)
+                    + " Back=" + DescribeRcw(AudioBackBuffer)
+                    + " totalReleased=" + totalReleased;
+                DirectSoundDiagnostics.Log(DiagId, site + ".release.exit", exitMsg);
+            }
+        }
+
+        /// <summary>
         /// Initializes the direct sound.
         /// </summary>
         private void InitializeDirectSound()
@@ -474,8 +536,14 @@
             DirectSoundDriver = null;
             var createDriverResult = NativeMethods.DirectSoundCreate(ref DeviceId, out DirectSoundDriver, IntPtr.Zero);
 
+            // Throw instead of silently returning: a silent return leaves the
+            // buffers null and Start's very next call would NRE anyway, but
+            // with a message that hides the actual failure.
             if (DirectSoundDriver == null || createDriverResult != 0)
-                return;
+            {
+                throw new InvalidOperationException(
+                    $"{nameof(NativeMethods.DirectSoundCreate)} failed for device {DeviceId} with result 0x{createDriverResult:X8}.");
+            }
 
             // Set Cooperative Level to PRIORITY (priority level can call the SetFormat and Compact methods)
             DirectSoundDriver.SetCooperativeLevel(NativeMethods.GetDesktopWindow(),
@@ -589,6 +657,21 @@
         /// </remarks>
         private void ClearBackBuffer()
         {
+            // ReleaseSyncRoot keeps this from racing the COM release path;
+            // the lock is reentrant, so the release path calling in here
+            // while already holding it is fine.
+            lock (ReleaseSyncRoot)
+            {
+                ClearBackBufferUnsafe();
+            }
+        }
+
+        /// <summary>
+        /// Implements <see cref="ClearBackBuffer"/>; callers must hold
+        /// <see cref="ReleaseSyncRoot"/>.
+        /// </summary>
+        private void ClearBackBufferUnsafe()
+        {
             if (AudioBackBuffer == null)
                 return;
 
@@ -683,16 +766,35 @@
         /// </summary>
         private void CycleLoop()
         {
-            while (TryBeginCycle())
+            try
             {
-                ExecuteCyle();
+                while (TryBeginCycle())
+                {
+                    ExecuteCyle();
 
-                // If the worker is paused, throttle the spin to a cheap
-                // ~15 ms cadence — matches StepTimer's resolution so the
-                // paused behavior is equivalent to the IntervalWorkerBase
-                // path.
-                if (WorkerState != WorkerState.Running)
-                    Thread.Sleep(15);
+                    // If the worker is paused, throttle the spin to a cheap
+                    // ~15 ms cadence — matches StepTimer's resolution so the
+                    // paused behavior is equivalent to the IntervalWorkerBase
+                    // path.
+                    if (WorkerState != WorkerState.Running)
+                        Thread.Sleep(15);
+                }
+            }
+            catch (Exception ex)
+            {
+                // An exception escaping a dedicated thread takes the whole
+                // process down. Cycle-logic exceptions are already routed to
+                // OnCycleException, so anything landing here is a teardown
+                // straggler touching a disposed primitive.
+                DirectSoundDiagnostics.Log(DiagId, "cycle.escape", ex.GetType().Name + ": " + ex.Message);
+            }
+            finally
+            {
+                // Release the dsound COM objects on the thread that created
+                // and owns them — never on the finalizer thread, and not on
+                // the disposing thread while this thread could still be
+                // touching the buffers mid-cycle.
+                ReleaseComObjects("CycleLoop");
             }
         }
 

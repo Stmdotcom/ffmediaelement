@@ -455,6 +455,27 @@ internal sealed unsafe class MediaContainer : IDisposable, ILoggingSource
     }
 
     /// <summary>
+    /// Receives the next available frame from the given component's decoder
+    /// under this container's decode lock. Use this instead of calling
+    /// <see cref="MediaComponent.ReceiveNextFrame"/> directly: the direct
+    /// call runs avcodec send/receive with no lock held, so a concurrent
+    /// <see cref="Dispose()"/> (which takes the decode lock) could free the
+    /// codec context mid-decode and corrupt the heap.
+    /// </summary>
+    /// <param name="t">The media type of the component to receive from.</param>
+    /// <returns>The next available frame, or null if none is available or the container is disposed.</returns>
+    public MediaFrame ReceiveNextFrame(MediaType t)
+    {
+        lock (DecodeSyncRoot)
+        {
+            if (IsDisposed || InputContext == null)
+                return null;
+
+            return Components[t].ReceiveNextFrame();
+        }
+    }
+
+    /// <summary>
     /// Performs audio, video and subtitle conversions on the decoded input frame so data
     /// can be used as a Frame. Please note that if the output is passed as a reference.
     /// This works as follows: if the output reference is null it will be automatically instantiated

@@ -115,9 +115,10 @@
         /// <inheritdoc />
         protected override void ExecuteCycleLogic(CancellationToken ct)
         {
-            // Cycle gap detection: this worker runs on StepTimer + ThreadPool
-            // (unlike DirectSoundPlayer which now has a dedicated thread). If
-            // the pool starves, decoded frames stop landing in the audio
+            // Cycle gap detection: this worker runs on a dedicated
+            // AboveNormal thread (see the constructor), so a gap here is CPU
+            // starvation or a slow decode call, not ThreadPool scheduling.
+            // When cycles stall, decoded frames stop landing in the audio
             // buffer and AudioRenderer.Read returns silence — which we see in
             // the dsound log as "renderer.silence reason=buffer_empty". This
             // log line confirms decoder starvation when those events spike.
@@ -175,6 +176,18 @@
         protected override void OnCycleException(Exception ex) =>
             this.LogError(Aspects.DecodingWorker, "Worker Cycle exception thrown", ex);
 
+        /// <inheritdoc />
+        protected override void Dispose(bool alsoManaged)
+        {
+            base.Dispose(alsoManaged);
+
+            // Join the dedicated cycle thread so the container cannot be
+            // disposed (freeing the codec contexts) while a decode call is
+            // still executing on this thread.
+            if (alsoManaged && CycleThread != Thread.CurrentThread && CycleThread.IsAlive)
+                CycleThread.Join(TimeSpan.FromSeconds(5));
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private int DecodeComponentBlocks(MediaType t, CancellationToken ct)
         {
@@ -213,8 +226,9 @@
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool AddNextBlock(MediaType t)
         {
-            // Decode the frames
-            var block = MediaCore.Blocks[t].Add(Container.Components[t].ReceiveNextFrame(), Container);
+            // Decode the frames. Receive through the container so the decode
+            // runs under its decode lock and cannot race container disposal.
+            var block = MediaCore.Blocks[t].Add(Container.ReceiveNextFrame(t), Container);
             return block != null;
         }
 
@@ -260,10 +274,22 @@
             while (WorkerState == WorkerState.Created && !IsDisposed)
                 Thread.Sleep(10);
 
-            while (TryBeginCycle())
+            try
             {
-                ExecuteCyle();
-                Thread.Sleep(15);
+                while (TryBeginCycle())
+                {
+                    ExecuteCyle();
+                    Thread.Sleep(15);
+                }
+            }
+            catch (Exception ex)
+            {
+                // An exception escaping a dedicated thread takes the process
+                // down. Cycle-logic exceptions already route to
+                // OnCycleException, so anything landing here is a teardown
+                // straggler touching a disposed primitive.
+                try { this.LogError(Aspects.DecodingWorker, "Worker cycle loop terminated by exception.", ex); }
+                catch { /* ignore */ }
             }
         }
     }

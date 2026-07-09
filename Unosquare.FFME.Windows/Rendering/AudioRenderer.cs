@@ -490,7 +490,24 @@
             SampleBlockSize = Constants.AudioBytesPerSample * Constants.AudioChannelCount;
             var bufferLength = WaveFormat.ConvertMillisToByteSize(2000); // 2-second buffer
             AudioBuffer = new CircularBuffer(bufferLength);
-            AudioDevice.Start();
+
+            try
+            {
+                AudioDevice.Start();
+            }
+            catch (Exception ex)
+            {
+                // Degrade to the no-audio path instead of orphaning a
+                // partially-started player: an orphan's COM objects would be
+                // released on the finalizer thread at the next GC.
+                this.LogError(Aspects.AudioRenderer, "Failed to start the audio device. Audio will be disabled.", ex);
+
+                try { AudioDevice.Dispose(); }
+                catch { /* Ignore exception and continue */ }
+
+                AudioDevice = null;
+                HasFiredAudioDeviceStopped = true;
+            }
         }
 
         /// <summary>

@@ -19,6 +19,7 @@
         private readonly AtomicBoolean HasDirectCommandCompleted = new(true);
         private readonly AtomicInteger m_PendingDirectCommand = new((int)DirectCommandType.None);
         private readonly AtomicBoolean m_IsCloseInterruptPending = new(false);
+        private readonly object CloseSyncRoot = new();
 
         #endregion
 
@@ -394,12 +395,23 @@
         /// <returns>Always returns false because media will not be resumed.</returns>
         private bool CommandCloseMedia()
         {
-            // Wait for the workers to stop
-            StopWorkers();
+            // Serialize concurrent closers. The interrupt-close task
+            // (CloseMediaAsync while an Open is in flight) runs outside
+            // PendingDirectCommand and is therefore invisible to disposal,
+            // which can call in here at the same time. Running the teardown
+            // twice sequentially is harmless; running it twice concurrently
+            // threw enumeration-vs-clear on the renderer/block dictionaries
+            // in both callers (both swallow), skipping the audio renderer's
+            // close — and with it the DirectSound COM release.
+            lock (CloseSyncRoot)
+            {
+                // Wait for the workers to stop
+                StopWorkers();
 
-            // Dispose the container
-            MediaCore.Container?.Dispose();
-            MediaCore.Container = null;
+                // Dispose the container
+                MediaCore.Container?.Dispose();
+                MediaCore.Container = null;
+            }
 
             return false;
         }
@@ -474,16 +486,25 @@
             // This causes the workers to stop and dispose.
             MediaCore.Workers?.Dispose();
 
-            // Call close on all renderers
-            foreach (var renderer in MediaCore.Renderers.Values)
-                renderer.OnClose();
+            // Call close on all renderers. Iterate over a snapshot and
+            // isolate each close: one renderer throwing must never skip the
+            // remaining renderers' teardown (in particular the audio
+            // renderer's DirectSound COM release).
+            foreach (var renderer in MediaCore.Renderers.ToArray())
+            {
+                try { renderer.Value.OnClose(); }
+                catch (Exception ex) { this.LogError(Aspects.EngineCommand, $"Failed to close the {renderer.Key} renderer.", ex); }
+            }
 
             // Remove the renderers disposing of them
             MediaCore.Renderers.Clear();
 
             // Dispose the Blocks for all components
-            foreach (var kvp in MediaCore.Blocks)
-                kvp.Value.Dispose();
+            foreach (var blocks in MediaCore.Blocks.Values.ToArray())
+            {
+                try { blocks.Dispose(); }
+                catch (Exception ex) { this.LogError(Aspects.EngineCommand, $"Failed to dispose the {blocks.MediaType} block buffer.", ex); }
+            }
 
             MediaCore.Blocks.Clear();
             DisposePreloadedSubtitles();

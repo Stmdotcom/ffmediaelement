@@ -127,7 +127,7 @@
             if (defaultCodec == null && forcedCodec == null)
             {
                 var errorMessage = $"Fatal error. Unable to find suitable decoder for {Stream->codecpar->codec_id}";
-                CloseComponent();
+                lock (CodecLock) CloseComponent();
                 throw new MediaContainerException(errorMessage);
             }
 
@@ -201,7 +201,7 @@
 
             if (selectedCodec == null)
             {
-                CloseComponent();
+                lock (CodecLock) CloseComponent();
                 throw new MediaContainerException($"Unable to find suitable decoder codec for stream {streamIndex}. Error code {codecOpenResult}");
             }
 

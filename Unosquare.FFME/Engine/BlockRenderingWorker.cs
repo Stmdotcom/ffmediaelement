@@ -174,6 +174,15 @@ namespace Unosquare.FFME.Engine
         protected override void Dispose(bool alsoManaged)
         {
             base.Dispose(alsoManaged);
+
+            // Join the quantum thread so no render call is still executing
+            // when the blocks it reads get disposed. The timeout is short
+            // because a render can be blocked on a synchronous UI dispatch;
+            // if the disposing thread is the UI thread, waiting longer would
+            // just deepen the stall.
+            if (alsoManaged && QuantumThread != Thread.CurrentThread && QuantumThread.IsAlive)
+                QuantumThread.Join(TimeSpan.FromSeconds(2));
+
             QuantumWaiter.Dispose();
         }
 
@@ -223,6 +232,15 @@ namespace Unosquare.FFME.Engine
             catch (ObjectDisposedException)
             {
                 /* Worker has been disposed */
+            }
+            catch (Exception ex)
+            {
+                // An exception escaping a dedicated thread takes the process
+                // down. Cycle-logic exceptions already route to
+                // OnCycleException, so anything landing here is a teardown
+                // straggler touching a disposed primitive.
+                try { this.LogError(Aspects.RenderingWorker, "Quantum thread terminated by exception.", ex); }
+                catch { /* ignore */ }
             }
         }
 
