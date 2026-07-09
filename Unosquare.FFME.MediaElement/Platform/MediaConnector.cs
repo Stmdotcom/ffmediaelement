@@ -40,8 +40,19 @@
         {
             if (Parent == null || sender == null) return;
 
+            // Capture the engine's open generation at raise time. The
+            // delegate below is queued to the dispatcher and cannot be
+            // recalled; without the guard it survives a Close/Open on the
+            // same element and lands ~milliseconds after the consumer's next
+            // Play — raising a spurious MediaEnded for the NEW stream and,
+            // worse, letting a stale LoopingBehavior Stop/Close act on it.
+            var generation = sender.OpenGenerationId;
+
             Parent.GuiContext.EnqueueInvoke(async () =>
             {
+                if (generation != sender.OpenGenerationId || !sender.State.HasMediaEnded)
+                    return;
+
                 Parent.PostMediaEndedEvent();
                 var behavior = Parent.LoopingBehavior;
 

@@ -615,9 +615,17 @@ namespace Unosquare.FFME.Engine
                 ? MediaCore.Blocks[main].RangeEndTime
                 : MediaCore.Timing.GetEndTime(main) ?? TimeSpan.MaxValue;
 
-            // Check End of Media Scenarios
+            // Check End of Media Scenarios. The first-render latch closes the
+            // post-open hole: right after Open the main block buffer is empty,
+            // making !CanResumeClock trivially true, so HasDecodingEnded was
+            // the ONLY defense against firing MediaEnded before the new
+            // stream ever rendered — and stale/re-poisoned values of that
+            // flag produced spurious MediaEnded ~5-12 ms after Play on reused
+            // elements. Invariant: MediaEnded cannot fire for an open
+            // generation that has never rendered a main-component block.
             if (!Commands.HasPendingCommands
                 && MediaCore.HasDecodingEnded
+                && State.HasRenderedFirstMainBlock
                 && !CanResumeClock(main))
             {
                 // Rendered all and nothing else to render
@@ -745,6 +753,11 @@ namespace Unosquare.FFME.Engine
 
             // Send the block to its corresponding renderer
             MediaCore.Renderers[t]?.Render(incomingBlock, playbackPosition);
+
+            // Arm the first-render latch for end-of-media detection once the
+            // main (timing reference) component has rendered a block.
+            if (t == MediaCore.Timing.ReferenceType)
+                State.HasRenderedFirstMainBlock = true;
 
             // Log the block statistics for debugging
             LogRenderBlock(incomingBlock, playbackPosition);

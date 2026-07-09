@@ -21,8 +21,23 @@
 
         private readonly AtomicBoolean m_IsSyncBuffering = new AtomicBoolean(false);
         private readonly AtomicBoolean m_HasDecodingEnded = new AtomicBoolean(false);
+        private readonly AtomicLong m_OpenGenerationId = new AtomicLong(0);
 
         private DateTime SyncBufferStartTime = DateTime.UtcNow;
+
+        /// <summary>
+        /// Gets a monotonically increasing token identifying the current
+        /// open/close generation of this engine. It is advanced at the start
+        /// of every Open command and at every Close post-processing,
+        /// immediately before media properties are reset. Capture it when
+        /// deferring work (queued event delegates, worker cycle epilogues)
+        /// and compare before applying the result: a mismatch means the media
+        /// the work was computed for is no longer the media the engine has
+        /// open, and the result must be discarded. This is what keeps a stale
+        /// MediaEnded — queued at real end-of-stream but delivered after a
+        /// Close/Open on the same element — from acting on the new stream.
+        /// </summary>
+        internal long OpenGenerationId => m_OpenGenerationId.Value;
 
         /// <summary>
         /// Holds the materialized block cache for each media type.
@@ -102,6 +117,12 @@
         #endregion
 
         #region Methods
+
+        /// <summary>
+        /// Advances <see cref="OpenGenerationId"/>, invalidating all deferred
+        /// work captured under previous generations.
+        /// </summary>
+        internal void BeginOpenGeneration() => m_OpenGenerationId.Increment();
 
         /// <summary>
         /// Signals that the engine has entered the syn-buffering state.

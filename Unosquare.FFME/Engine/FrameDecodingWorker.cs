@@ -147,6 +147,10 @@
 
             LastCycleTicks = nowTicks;
 
+            // Capture the open generation this cycle decodes for; the finally
+            // block below must not publish results onto a newer generation.
+            var generation = MediaCore.OpenGenerationId;
+
             try
             {
                 if (MediaCore.HasDecodingEnded || ct.IsCancellationRequested)
@@ -168,7 +172,14 @@
 
                 // Detect End of Decoding Scenarios
                 // The Rendering will check for end of media when this condition is set.
-                MediaCore.HasDecodingEnded = DetectHasDecodingEnded();
+                // Only publish onto the generation this cycle decoded for: a
+                // straggler cycle straddling a Close (its disposal wait timed
+                // out) would otherwise evaluate the disposed components as
+                // "nothing left to decode" and re-poison HasDecodingEnded
+                // right after ResetMediaProperties cleared it — arming a
+                // spurious MediaEnded on the next stream.
+                if (generation == MediaCore.OpenGenerationId)
+                    MediaCore.HasDecodingEnded = DetectHasDecodingEnded();
             }
         }
 

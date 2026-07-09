@@ -19,6 +19,7 @@
         private readonly MediaEngine MediaCore;
         private readonly AtomicInteger m_MediaState = new((int)MediaPlaybackState.Close);
         private readonly AtomicBoolean m_HasMediaEnded = new(default);
+        private readonly AtomicBoolean m_HasRenderedFirstMainBlock = new(default);
 
         private readonly AtomicBoolean m_IsBuffering = new(default);
         private readonly AtomicLong m_DecodingBitRate = new(default);
@@ -517,6 +518,23 @@
             }
         }
 
+        /// <summary>
+        /// Gets or sets a value indicating whether at least one block of the
+        /// main (timing reference) component has been sent to its renderer
+        /// since the current open generation began. This is the first-render
+        /// latch for end-of-media detection: right after Open the main block
+        /// buffer is empty, which makes the "nothing left to render" half of
+        /// the ended condition trivially true, so the detection must also
+        /// prove something was ever rendered. Reset by
+        /// <see cref="ResetMediaProperties"/>; set by the block rendering
+        /// worker. Not a notification property.
+        /// </summary>
+        internal bool HasRenderedFirstMainBlock
+        {
+            get => m_HasRenderedFirstMainBlock.Value;
+            set => m_HasRenderedFirstMainBlock.Value = value;
+        }
+
         #endregion
 
         #region State Management Methods
@@ -683,6 +701,7 @@
             Position = default;
             FramePosition = default;
             HasMediaEnded = default;
+            HasRenderedFirstMainBlock = false;
 
             // HasDecodingEnded lives on MediaEngine (set by FrameDecodingWorker)
             // and is not part of the MediaEngineState backing fields. Reset it

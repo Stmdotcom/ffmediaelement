@@ -226,7 +226,10 @@
             }
             else if (command == DirectCommandType.Close)
             {
-                // Update notification properties
+                // Update notification properties. Advance the generation
+                // BEFORE the reset — see the matching comment in
+                // CommandOpenMedia.
+                MediaCore.BeginOpenGeneration();
                 MediaCore.Timing.Reset();
                 State.ResetAll();
                 MediaCore.ResetPlaybackPosition();
@@ -280,8 +283,13 @@
                 // TODO: Sometimes when the stream can't be read, the sample player stays as if it were trying to open
                 // until the interrupt timeout occurs but and the Real-Time Clock continues. Strange behavior. Investigate more.
 
-                // Signal the initial state
+                // Signal the initial state. The generation advances BEFORE
+                // the property reset so that any deferred work captured under
+                // the previous generation (stale queued MediaEnded delegates,
+                // straggler decode cycle epilogues) is already invalidated by
+                // the time the flags it would poison are cleared.
                 var source = inputStream == null ? streamUri : inputStream.StreamUri;
+                MediaCore.BeginOpenGeneration();
                 MediaCore.Timing.Reset();
                 State.ResetAll();
                 State.UpdateSource(source);
