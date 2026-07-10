@@ -1,4 +1,4 @@
-# Publishes Sinaxxr.FFME.Windows to nuget.org.
+# Publishes Sinaxxr.FFME.Windows to nuget.org via Trusted Publishing (OIDC).
 #
 # The release contract: the <Version> in Unosquare.FFME.Windows.csproj IS
 # the release. Every push to master packs and pushes; --skip-duplicate makes
@@ -6,13 +6,15 @@
 # pushes (docs, refactors) publish nothing and bumping the version is the
 # only step a release needs.
 #
-# One-time setup: add a repository secret named NUGET_API_KEY
-# (repo Settings -> Secrets and variables -> Actions) holding a nuget.org
-# API key with push scope for Sinaxxr.FFME.Windows. Keys expire after at
-# most a year; a failed "push" step here usually means the key lapsed.
+# Auth is Trusted Publishing — no API keys, no secrets, nothing expires.
+# The NuGet/login step exchanges this workflow run's GitHub OIDC token for a
+# short-lived publish key, authorized by a Trusted Publisher Policy on
+# nuget.org (profile "sinaxxr" -> Trusted Publishing) pinned to this repo
+# and THIS WORKFLOW FILENAME. Renaming this file breaks publishing until the
+# policy is updated to match.
 #
 # The "Run workflow" button (workflow_dispatch) re-runs publishing manually,
-# e.g. right after adding the secret for the first time.
+# e.g. right after creating the policy for the first time.
 
 name: Publish NuGet package
 
@@ -20,6 +22,10 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required for the OIDC token Trusted Publishing consumes
 
 jobs:
   publish:
@@ -36,5 +42,11 @@ jobs:
       - name: Pack
         run: dotnet pack Unosquare.FFME.Windows/Unosquare.FFME.Windows.csproj -c Release -o out
 
+      - name: NuGet login (Trusted Publishing)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: sinaxxr
+
       - name: Push to nuget.org (skips already-published versions)
-        run: dotnet nuget push out\*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+        run: dotnet nuget push out\*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
