@@ -93,6 +93,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Primitives\AtomicDouble.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Primitives\AtomicInteger.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Primitives\AtomicLong.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Primitives\HighResolutionTimePeriod.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Primitives\AtomicTimeSpan.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Primitives\AtomicTypeBase.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Diagnostics\Benchmark.cs" />

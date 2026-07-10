@@ -20,6 +20,7 @@
         private readonly AtomicInteger m_PendingDirectCommand = new((int)DirectCommandType.None);
         private readonly AtomicBoolean m_IsCloseInterruptPending = new(false);
         private readonly object CloseSyncRoot = new();
+        private bool HasTimePeriod;
 
         #endregion
 
@@ -478,6 +479,11 @@
             // Instantiate the workers and fire them up.
             MediaCore.Workers = new MediaWorkerSet(MediaCore);
             MediaCore.Workers.Start();
+
+            // Hold the 1 ms system timer resolution while media is open so
+            // the workers' 15 ms pacing and frame waits don't quantize up to
+            // the default ~15.6 ms ticks.
+            HighResolutionTimePeriod.Acquire(ref HasTimePeriod);
         }
 
         /// <summary>
@@ -522,6 +528,10 @@
 
             // Reset the clock
             MediaCore.ResetPlaybackPosition();
+
+            // Give back the 1 ms timer resolution (no-op if never acquired,
+            // e.g. when an Open failed before its workers started).
+            HighResolutionTimePeriod.Release(ref HasTimePeriod);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
