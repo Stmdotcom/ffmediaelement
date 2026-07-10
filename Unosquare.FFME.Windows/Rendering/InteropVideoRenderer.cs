@@ -8,11 +8,13 @@
     using Common;
     using Container;
     using Diagnostics;
+    using Primitives;
     using Unosquare.FFME.Engine;
 
     internal sealed class InteropVideoRenderer : VideoRendererBase, IDisposable
     {
         private readonly InteropBuffer Graphics;
+        private readonly AtomicBoolean IsUpdatePending = new(false);
 
         public InteropVideoRenderer(MediaEngine mediaCore)
             : base(mediaCore)
@@ -37,7 +39,7 @@
                     return;
 
                 MediaElement?.RaiseRenderingVideoEvent(block, bitmap, clockPosition);
-                UpdateTargetImage(DispatcherPriority.Loaded, true);
+                UpdateTargetImage(DispatcherPriority.Loaded);
             }
             catch (Exception ex)
             {
@@ -58,11 +60,34 @@
 
         public void Dispose() => Graphics?.Dispose();
 
-        private void UpdateTargetImage(DispatcherPriority priority, bool syncrhonous)
+        private void UpdateTargetImage(DispatcherPriority priority)
         {
-            var task = VideoDispatcher?.InvokeAsync(() => Graphics.Render(MediaElement.VideoView), priority);
-            if (syncrhonous)
-                task?.Wait();
+            // Post — do not wait. The pixel copy already happened on the
+            // worker (Graphics.Write), so the UI only needs to invalidate
+            // the interop bitmap; waiting here parked the render worker on
+            // every frame. Coalesce so a stalled UI cannot accumulate one
+            // queued operation per decoded frame.
+            if (IsUpdatePending.Value)
+                return;
+
+            IsUpdatePending.Value = true;
+            var operation = VideoDispatcher?.InvokeAsync(
+                () =>
+                {
+                    try { Graphics.Render(MediaElement.VideoView); }
+                    finally { IsUpdatePending.Value = false; }
+                },
+                priority);
+
+            if (operation == null)
+            {
+                IsUpdatePending.Value = false;
+                return;
+            }
+
+            operation.Aborted += (s, e) => IsUpdatePending.Value = false;
+            if (operation.Status == DispatcherOperationStatus.Aborted)
+                IsUpdatePending.Value = false;
         }
 
         private sealed class InteropBuffer : IDisposable

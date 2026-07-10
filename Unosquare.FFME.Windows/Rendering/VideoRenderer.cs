@@ -90,7 +90,19 @@
             var block = BeginRenderingCycle(mediaBlock);
             if (block == null) return;
 
-            VideoDispatcher?.Invoke(() =>
+            // Post — do not send — the bitmap update to the UI thread. The
+            // previous synchronous Invoke parked this worker (the engine's
+            // Highest-priority quantum thread) for the entire UI round-trip,
+            // so any UI stall froze the whole render loop: audio feeding,
+            // clock updates, and end-of-media detection included. With many
+            // elements, all their render workers convoyed on the single
+            // dispatcher. IsRenderingInProgress — cleared by
+            // FinishRenderingCycle in the finally below — keeps at most one
+            // update in flight per renderer, so the dispatcher queue cannot
+            // flood. Block lifetime stays safe: WriteVideoFrameBuffer
+            // re-checks disposal and takes the block's reader lock when the
+            // delegate actually runs.
+            var operation = VideoDispatcher?.InvokeAsync(() =>
             {
                 try
                 {
@@ -107,7 +119,21 @@
                     FinishRenderingCycle(block, clockPosition);
                 }
             },
-            DispatcherPriority.Normal);
+            DispatcherPriority.Render);
+
+            // If the operation never got queued (no dispatcher) or gets
+            // aborted (dispatcher shutdown), the finally above never runs;
+            // clear the in-progress flag here or the renderer would coalesce
+            // away every subsequent frame for the rest of its lifetime.
+            if (operation == null)
+            {
+                IsRenderingInProgress = false;
+                return;
+            }
+
+            operation.Aborted += (s, e) => IsRenderingInProgress = false;
+            if (operation.Status == DispatcherOperationStatus.Aborted)
+                IsRenderingInProgress = false;
         }
 
         #endregion

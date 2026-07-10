@@ -29,14 +29,14 @@
     <NeutralLanguage>en</NeutralLanguage>
 
     <!-- Assembly Version Information -->
-    <AssemblyVersion>8.1.361.5</AssemblyVersion>
-    <FileVersion>8.1.361.5</FileVersion>
+    <AssemblyVersion>8.1.361.6</AssemblyVersion>
+    <FileVersion>8.1.361.6</FileVersion>
 
     <!-- NuGet Package Properties -->
     <!-- https://docs.microsoft.com/en-us/nuget/reference/msbuild-targets#pack-target -->
     <PackageId>Sinaxxr.FFME.Windows</PackageId>
-    <PackageVersion>8.1.361-sinaxxr.5</PackageVersion>
-    <Version>8.1.361-sinaxxr.5</Version>
+    <PackageVersion>8.1.361-sinaxxr.6</PackageVersion>
+    <Version>8.1.361-sinaxxr.6</Version>
     <Authors>Sinaxxr (fork of Mario Di Vece et al.)</Authors>
     <Title>FFME: WPF MediaElement Alternative (Sinaxxr fork) — FFmpeg 8 + lifecycle fixes</Title>
     <Description>Fork of Unosquare.FFME upgraded to FFmpeg 8 with lifecycle stability work: dedicated decode/read worker threads, DirectSoundPlayer audio output, seek-to-zero close/open workaround. Native FFmpeg binaries are not included; see repository for installation notes.</Description>
@@ -47,6 +47,7 @@
     <PackageIcon>ffme.png</PackageIcon>
     <PackageTags>ffme hls wpf ffmpeg mediaelement h264 h265 hevc audio video decoding playback frame</PackageTags>
     <PackageReleaseNotes>
+      8.1.361-sinaxxr.6: Video render no longer blocks the engine's Highest-priority quantum thread on a synchronous UI dispatch. WriteableBitmap updates post to the dispatcher fire-and-forget (coalesced to one in-flight per renderer); the InteropBitmap renderer stops waiting on its UI invalidation. UI stalls can no longer starve audio feeding, clock updates, or end-of-media detection, and many concurrent elements no longer convoy their render workers on the single dispatcher thread.
       8.1.361-sinaxxr.5: Fix spurious MediaEnded on reused elements. New engine invariant: MediaEnded cannot fire for an open generation that has never rendered a main-component block. An open-generation token invalidates stale queued MediaEnded dispatcher delegates (including their LoopingBehavior Stop/Close actions) across Close/Open, and guards the decode worker's HasDecodingEnded publication against straggler cycles. Consumers no longer need pre-open Stop()+Close() or Seek(0)-after-Open workarounds.
       8.1.361-sinaxxr.4: Deterministic teardown. DirectSound COM objects are released on their owning cycle thread (never the finalizer thread); worker disposal stops cycles deterministically and joins dedicated threads; concurrent double-close (interrupt-close racing dispose) is serialized; renderer close is exception-isolated; decode calls run under the container decode lock so disposal cannot free a codec context mid-decode; audio device creation failures degrade to no-audio instead of orphaning COM state.
       8.1.361-sinaxxr.3: Upgrade to FFmpeg 8.1 (FFmpeg.AutoGen 8.1.0). Sonames unchanged from 8.0 (avcodec-62 et al.); pair with BtbN n8.1 win64-gpl-shared binaries.
