@@ -76,12 +76,12 @@
             };
 
             // Run the decode cycle on a dedicated AboveNormal-priority
-            // thread instead of the StepTimer + ThreadPool path. The pool
-            // path was observed to stall both this worker and the packet
-            // reader for 1.5-2 seconds at a time during heavy WPF work
-            // (BitmapImage decode, location load), causing audio buffer
-            // underruns and video freezes. Dedicated thread is immune to
-            // pool injection backoff.
+            // thread instead of the shared-timer + ThreadPool path this
+            // worker once rode. The pool path was observed to stall both
+            // this worker and the packet reader for 1.5-2 seconds at a time
+            // during heavy WPF work (BitmapImage decode, location load),
+            // causing audio buffer underruns and video freezes. Dedicated
+            // thread is immune to pool injection backoff.
             CycleThread = new Thread(CycleLoop)
             {
                 Name = nameof(FrameDecodingWorker) + ".cycle",
@@ -270,11 +270,10 @@
 
         /// <summary>
         /// Runs <see cref="WorkerBase.ExecuteCycleLogic"/> on a dedicated
-        /// AboveNormal-priority thread instead of via StepTimer + ThreadPool.
-        /// Pacing is a fixed 15 ms sleep per cycle to match StepTimer's
-        /// natural cadence — the cycle itself is fast (decode-loop returns
-        /// when blocks are full or no packets are queued), so the sleep
-        /// dominates and CPU stays low.
+        /// AboveNormal-priority thread. Pacing is a fixed 15 ms sleep per
+        /// cycle (the engine's default timing period) — the cycle itself is
+        /// fast (decode-loop returns when blocks are full or no packets are
+        /// queued), so the sleep dominates and CPU stays low.
         /// </summary>
         private void CycleLoop()
         {

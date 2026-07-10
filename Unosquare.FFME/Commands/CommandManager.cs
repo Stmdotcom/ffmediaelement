@@ -15,7 +15,9 @@ namespace Unosquare.FFME.Commands
     /// Provides the MediaEngine with an API to execute media control commands.
     /// Direct Commands execute immediately (Open, Close, Change)
     /// Priority Commands execute in the queue but before anything else and are exclusive (Play, Pause, Stop)
-    /// Seek commands are queued and replaced. These are processed in a deferred manner by this worker.
+    /// Seek commands are queued and replaced. These are processed by this worker
+    /// on its dedicated cycle thread, woken immediately on enqueue via
+    /// <see cref="IntervalWorkerBase.SignalCycle"/>.
     /// </summary>
     /// <seealso cref="IntervalWorkerBase" />
     /// <seealso cref="IMediaWorker" />

@@ -55,7 +55,7 @@
             };
 
             // Run the read cycle on a dedicated AboveNormal-priority thread
-            // instead of the StepTimer + ThreadPool path. See comment in
+            // instead of the shared-timer + ThreadPool path. See comment in
             // FrameDecodingWorker — same fix, same reasoning.
             CycleThread = new Thread(CycleLoop)
             {
@@ -141,9 +141,8 @@
 
         /// <summary>
         /// Runs <see cref="WorkerBase.ExecuteCycleLogic"/> on a dedicated
-        /// AboveNormal-priority thread instead of via StepTimer + ThreadPool.
-        /// Pacing is a fixed 15 ms sleep per cycle to match StepTimer's
-        /// natural cadence.
+        /// AboveNormal-priority thread. Pacing is a fixed 15 ms sleep per
+        /// cycle (the engine's default timing period).
         /// </summary>
         private void CycleLoop()
         {

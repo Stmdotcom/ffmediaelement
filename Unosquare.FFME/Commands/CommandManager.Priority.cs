@@ -38,6 +38,11 @@
                 PendingPriorityCommand = command;
                 PriorityCommandCompleted.Reset();
 
+                // Wake the command cycle thread so the command executes
+                // immediately instead of waiting out the current timing
+                // period.
+                SignalCycle();
+
                 var commandTask = new Task<bool>(() =>
                 {
                     ResumeAsync().Wait();

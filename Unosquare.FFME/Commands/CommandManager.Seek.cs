@@ -104,6 +104,7 @@
                 {
                     QueuedSeekOperation.Mode = seekMode;
                     QueuedSeekOperation.Position = seekTarget;
+                    SignalCycle();
                     return QueuedSeekTask;
                 }
 
@@ -119,6 +120,11 @@
                 var seekOperation = new SeekOperation(seekTarget, seekMode);
                 QueuedSeekOperation = seekOperation;
                 QueuedSeekTask = seekOperation.CompletionTask;
+
+                // Wake the command cycle thread so the seek starts
+                // immediately instead of waiting out the current timing
+                // period.
+                SignalCycle();
                 return QueuedSeekTask;
             }
         }

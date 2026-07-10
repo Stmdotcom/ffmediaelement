@@ -161,14 +161,14 @@
             StartAsync();
 
             // Run the cycle on a dedicated Highest-priority thread instead
-            // of via StepTimer + ThreadPool. The pool path was the stutter
-            // driver: a Task.Run dispatch lag of 500+ ms (observed in the
-            // dsound logs) starves the dsound back buffer mid-playback.
-            // A dedicated thread is immune to ThreadPool saturation and
-            // its run-loop is naturally paced by WaitAny on the dsound
-            // notification handles (~50 ms cycle). Audio-only — video and
-            // subtitle workers stay on the existing IntervalWorkerBase
-            // path.
+            // of the shared-timer + ThreadPool path this worker once rode.
+            // The pool path was the stutter driver: a Task.Run dispatch lag
+            // of 500+ ms (observed in the dsound logs) starves the dsound
+            // back buffer mid-playback. A dedicated thread is immune to
+            // ThreadPool saturation and its run-loop is naturally paced by
+            // WaitAny on the dsound notification handles (~50 ms cycle).
+            // Highest (not AboveNormal like IntervalWorkerBase threads)
+            // because a late audio feed is immediately audible.
             CycleThread = new Thread(CycleLoop)
             {
                 Name = nameof(DirectSoundPlayer) + ".cycle",
@@ -231,7 +231,6 @@
                         DiagId,
                         "cycle.gap",
                         "ms=" + gap
-                        + " schedLagMs=" + StepTimer.LastDispatchLagMs
                         + " prevWaitMs=" + LastCycleWaitMs.ToString("F1", CultureInfo.InvariantCulture)
                         + " prevFeedMs=" + LastCycleFeedMs.ToString("F1", CultureInfo.InvariantCulture)
                         + " pool=" + (t.IsThreadPoolThread ? "y" : "n")
@@ -758,11 +757,10 @@
 
         /// <summary>
         /// Runs <see cref="WorkerBase.ExecuteCycleLogic"/> on a dedicated
-        /// Highest-priority thread. Replaces the StepTimer/ThreadPool
-        /// dispatch path that <see cref="IntervalWorkerBase"/> would have
-        /// provided. Loop exits when <see cref="WorkerBase.TryBeginCycle"/>
-        /// returns false (worker stopped or disposed); the worker state
-        /// transitions are handled inside that method.
+        /// Highest-priority thread. Loop exits when
+        /// <see cref="WorkerBase.TryBeginCycle"/> returns false (worker
+        /// stopped or disposed); the worker state transitions are handled
+        /// inside that method.
         /// </summary>
         private void CycleLoop()
         {
@@ -773,9 +771,9 @@
                     ExecuteCyle();
 
                     // If the worker is paused, throttle the spin to a cheap
-                    // ~15 ms cadence — matches StepTimer's resolution so the
-                    // paused behavior is equivalent to the IntervalWorkerBase
-                    // path.
+                    // ~15 ms cadence — the engine's default timing period,
+                    // matching the paused behavior of IntervalWorkerBase
+                    // threads.
                     if (WorkerState != WorkerState.Running)
                         Thread.Sleep(15);
                 }
