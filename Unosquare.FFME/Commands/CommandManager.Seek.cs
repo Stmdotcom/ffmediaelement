@@ -118,13 +118,7 @@
 
                 var seekOperation = new SeekOperation(seekTarget, seekMode);
                 QueuedSeekOperation = seekOperation;
-                QueuedSeekTask = new Task<bool>(() =>
-                {
-                    seekOperation.Wait();
-                    return true;
-                });
-
-                QueuedSeekTask.Start();
+                QueuedSeekTask = seekOperation.CompletionTask;
                 return QueuedSeekTask;
             }
         }
@@ -336,12 +330,15 @@
         #region Support Classes
 
         /// <summary>
-        /// Provides parameters and a reset event to reference when the operation completes.
+        /// Provides parameters and a completion task to reference when the operation completes.
         /// </summary>
         /// <seealso cref="IDisposable" />
         private sealed class SeekOperation : IDisposable
         {
             private readonly object SyncLock = new();
+            private readonly TaskCompletionSource<bool> CompletionSource =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
             private bool IsDisposed;
 
             /// <summary>
@@ -366,42 +363,25 @@
             public SeekMode Mode { get; set; }
 
             /// <summary>
-            /// Gets the seek completed event.
+            /// Gets a hot task that completes when the seek operation
+            /// finishes (i.e. when <see cref="Dispose"/> runs). This is what
+            /// consumers await; the previous implementation parked a
+            /// ThreadPool thread on a reset event for the duration of every
+            /// seek. Continuations run asynchronously so awaiters never
+            /// execute inline on the command thread completing the seek.
             /// </summary>
-            private ManualResetEventSlim SeekCompleted { get; } = new(false);
-
-            /// <summary>
-            /// Waits for the <see cref="SeekCompleted"/> event to be set.
-            /// </summary>
-            public void Wait()
-            {
-                lock (SyncLock)
-                {
-                    if (IsDisposed) return;
-                }
-
-                SeekCompleted.Wait();
-            }
+            public Task<bool> CompletionTask => CompletionSource.Task;
 
             /// <inheritdoc />
-            public void Dispose() => Dispose(true);
-
-            /// <summary>
-            /// Releases unmanaged and - optionally - managed resources.
-            /// </summary>
-            /// <param name="alsoManaged"><c>true</c> to release both managed and unmanaged resources; <c>false</c> to release only unmanaged resources.</param>
-            private void Dispose(bool alsoManaged)
+            public void Dispose()
             {
                 lock (SyncLock)
                 {
                     if (IsDisposed) return;
-                    SeekCompleted.Set();
-
-                    if (alsoManaged)
-                        SeekCompleted.Dispose();
-
                     IsDisposed = true;
                 }
+
+                CompletionSource.TrySetResult(true);
             }
         }
 
