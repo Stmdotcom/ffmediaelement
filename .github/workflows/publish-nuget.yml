@@ -1,0 +1,40 @@
+# Publishes Sinaxxr.FFME.Windows to nuget.org.
+#
+# The release contract: the <Version> in Unosquare.FFME.Windows.csproj IS
+# the release. Every push to master packs and pushes; --skip-duplicate makes
+# the push a no-op when that version is already on nuget.org, so version-less
+# pushes (docs, refactors) publish nothing and bumping the version is the
+# only step a release needs.
+#
+# One-time setup: add a repository secret named NUGET_API_KEY
+# (repo Settings -> Secrets and variables -> Actions) holding a nuget.org
+# API key with push scope for Sinaxxr.FFME.Windows. Keys expire after at
+# most a year; a failed "push" step here usually means the key lapsed.
+#
+# The "Run workflow" button (workflow_dispatch) re-runs publishing manually,
+# e.g. right after adding the secret for the first time.
+
+name: Publish NuGet package
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Pack
+        run: dotnet pack Unosquare.FFME.Windows/Unosquare.FFME.Windows.csproj -c Release -o out
+
+      - name: Push to nuget.org (skips already-published versions)
+        run: dotnet nuget push out\*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
