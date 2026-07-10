@@ -554,13 +554,17 @@ namespace Unosquare.FFME.Engine
             && Commands.IsActivelySeeking
             && !MediaCore.Blocks[main].IsInRange(MediaCore.PlaybackPosition))
             {
-                // Check if we finally have seek blocks available
-                // if we don't get seek blocks in range and we are not step-seeking,
+                // Always yield this quantum thread to the decoder producing
+                // the seek blocks. Step and stop seek modes used to skip the
+                // wait entirely, busy-spinning a Highest-priority thread
+                // against the very decoder they were waiting on.
+                var hasSeekBlocks = Commands.WaitForSeekBlocks(1);
+
+                // If we don't get seek blocks in range and we are not step-seeking,
                 // then we simply break out of the loop and render whatever it is we have
                 // to create the illussion of smooth seeking. For precision seeking we
                 // continue the loop.
-                if (Commands.ActiveSeekMode == CommandManager.SeekMode.Normal &&
-                    !Commands.WaitForSeekBlocks(1))
+                if (Commands.ActiveSeekMode == CommandManager.SeekMode.Normal && !hasSeekBlocks)
                 {
                     if (!State.ScrubbingEnabled)
                         continue;
