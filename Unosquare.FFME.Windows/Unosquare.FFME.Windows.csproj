@@ -39,7 +39,7 @@
     <Version>8.1.361-sinaxxr.7</Version>
     <Authors>Sinaxxr (fork of Mario Di Vece et al.)</Authors>
     <Title>FFME: WPF MediaElement Alternative (Sinaxxr fork) — FFmpeg 8 + lifecycle fixes</Title>
-    <Description>Fork of Unosquare.FFME upgraded to FFmpeg 8 with lifecycle stability work: dedicated decode/read worker threads, DirectSoundPlayer audio output, seek-to-zero close/open workaround. Native FFmpeg binaries are not included; see repository for installation notes.</Description>
+    <Description>Fork of Unosquare.FFME upgraded to FFmpeg 8.1 with lifecycle and performance work: ThreadPool-free engine (every worker on a dedicated thread, event-driven command dispatch), DirectSoundPlayer audio output, deterministic teardown, spurious-MediaEnded fix, UI-decoupled video rendering. Native FFmpeg binaries are not included; see repository for installation notes.</Description>
     <Copyright>Sinaxxr 2026; original work (C) Unosquare SA de CV, Mario Di Vece, and contributors 2015-2024</Copyright>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>

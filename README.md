@@ -11,10 +11,13 @@ A fork of [unosquare/ffmediaelement](https://github.com/unosquare/ffmediaelement
 
 This fork tracks upstream FFME 7.0.361 with the following additions:
 
-- **FFmpeg 8 / FFmpeg.AutoGen 8.0.0.1** — patched container/decoder code for the FFmpeg 8 API breakages (display matrix lookup via `av_packet_side_data_get`, `pkt_size` → `opaque`, `SwsFlags` enum, etc.).
-- **Dedicated decode/read worker threads** — `PacketReadingWorker` and `FrameDecodingWorker` are pinned to dedicated threads instead of the .NET ThreadPool, eliminating audio stutter caused by ThreadPool dispatch starvation under sustained load.
-- **DirectSoundPlayer audio output** — replaces the legacy WaveOut path that exhibited reliability issues during fast open/close cycles.
-- **Seek-to-zero close/open workaround** — FFME carries a sticky "ended" flag across `Close`/`Open` cycles that prevents fresh playback; this fork issues a `Seek(TimeSpan.Zero)` between `Open` and `Play` to clear it.
+- **FFmpeg 8.1 / FFmpeg.AutoGen 8.1.0** — patched container/decoder code for the FFmpeg 8 API breakages (display matrix lookup via `av_packet_side_data_get`, `pkt_size` → `opaque`, `SwsFlags` enum, etc.).
+- **ThreadPool-free engine** — every engine worker (packet reading, frame decoding, block rendering, command dispatch, audio feeding, log flushing) runs on its own dedicated thread, eliminating the audio stutter and 500+ ms command latency caused by ThreadPool dispatch starvation under sustained load. Play/pause/seek wake the command thread immediately on enqueue.
+- **DirectSoundPlayer audio output** — replaces the legacy WaveOut path that exhibited reliability issues during fast open/close cycles; COM objects are released deterministically on their owning thread (never the finalizer thread).
+- **Deterministic teardown** — worker disposal stops cycles and joins their threads instead of racing them; fixes a finalizer-thread access violation and a dispose-vs-command deadlock present upstream.
+- **No spurious MediaEnded** — engine invariant: `MediaEnded` cannot fire for an open generation that never rendered a frame, and stale queued `MediaEnded` dispatches self-discard across `Close`/`Open` on reused elements. Consumers need no pre-open `Stop()`/`Close()` or seek-to-zero workarounds.
+- **UI-decoupled video rendering** — bitmap updates post to the dispatcher fire-and-forget (coalesced), so UI stalls can no longer starve audio feeding, clock updates, or end-of-media detection.
+- **1 ms timer resolution** held while any media is open, for accurate frame pacing.
 
 The package targets **net8.0-windows** only (upstream's net48 target has been dropped).
 
