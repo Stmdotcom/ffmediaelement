@@ -77,6 +77,12 @@ internal abstract class WorkerBase : IWorker
     /// <inheritdoc />
     public Task<WorkerState> StartAsync()
     {
+        // Disposal check outside the sync block, like PauseAsync (#576):
+        // Dispose runs OnDisposing outside SyncLock but a disposing worker
+        // must never let a state call block behind disposal.
+        if (IsDisposed || IsDisposing)
+            return Task.FromResult(WorkerState);
+
         lock (SyncLock)
         {
             if (IsDisposed || IsDisposing)
@@ -119,6 +125,15 @@ internal abstract class WorkerBase : IWorker
     /// <inheritdoc />
     public Task<WorkerState> ResumeAsync()
     {
+        // Disposal check outside the sync block, like PauseAsync (#576).
+        // THE deadlock this prevents: a direct-command task's ResumeAsync
+        // blocked on SyncLock held by a disposer whose OnDisposing was
+        // waiting for that very command to complete — the command could
+        // never reach its completion flag, the disposer never returned,
+        // and the disposing thread (often the UI thread) froze for good.
+        if (IsDisposed || IsDisposing)
+            return Task.FromResult(WorkerState);
+
         lock (SyncLock)
         {
             if (IsDisposed || IsDisposing)
@@ -137,6 +152,10 @@ internal abstract class WorkerBase : IWorker
     /// <inheritdoc />
     public Task<WorkerState> StopAsync()
     {
+        // Disposal check outside the sync block, like PauseAsync (#576).
+        if (IsDisposed || IsDisposing)
+            return Task.FromResult(WorkerState);
+
         lock (SyncLock)
         {
             if (IsDisposed || IsDisposing)
@@ -186,12 +205,20 @@ internal abstract class WorkerBase : IWorker
         // disposing thread; the disposal guards here and in TryBeginCycle /
         // ExecuteCyle keep a straggler from touching disposed primitives
         // in that case.
-        var deadline = Environment.TickCount64 + 5000;
-        while (!WantedStateCompleted.Wait(Constants.DefaultTimingPeriod))
+        try
         {
-            Interrupt();
-            if (Environment.TickCount64 >= deadline)
-                break;
+            var deadline = Environment.TickCount64 + 5000;
+            while (!WantedStateCompleted.Wait(Constants.DefaultTimingPeriod))
+            {
+                Interrupt();
+                if (Environment.TickCount64 >= deadline)
+                    break;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // A concurrent Dispose won the race and already destroyed the
+            // wait handle; the lock below observes IsDisposed and returns.
         }
 
         lock (SyncLock)
@@ -206,7 +233,20 @@ internal abstract class WorkerBase : IWorker
             WorkerState = WorkerState.Stopped;
             WantedWorkerState = WorkerState.Stopped;
             WantedStateCompleted.Set();
-            try { OnDisposing(); } catch { /* Ignore */ }
+        }
+
+        // OnDisposing must run OUTSIDE SyncLock. CommandManager's
+        // OnDisposing blocks until its pending direct command completes,
+        // and that command's epilogue calls state methods (ResumeAsync)
+        // that need SyncLock — running the callback while holding the lock
+        // deadlocked the disposing thread against the command it was
+        // waiting for. Double-dispose is excluded by IsDisposing above;
+        // state methods and cycles turn away on the flag without touching
+        // the primitives disposed below.
+        try { OnDisposing(); } catch { /* Ignore */ }
+
+        lock (SyncLock)
+        {
             CycleClock.Reset();
             WantedStateCompleted.Dispose();
             TokenSource.Dispose();
