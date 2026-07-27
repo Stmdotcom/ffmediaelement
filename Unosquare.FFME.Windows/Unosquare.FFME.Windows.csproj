@@ -29,14 +29,14 @@
     <NeutralLanguage>en</NeutralLanguage>
 
     <!-- Assembly Version Information -->
-    <AssemblyVersion>8.1.361.7</AssemblyVersion>
-    <FileVersion>8.1.361.7</FileVersion>
+    <AssemblyVersion>8.1.361.8</AssemblyVersion>
+    <FileVersion>8.1.361.8</FileVersion>
 
     <!-- NuGet Package Properties -->
     <!-- https://docs.microsoft.com/en-us/nuget/reference/msbuild-targets#pack-target -->
     <PackageId>Sinaxxr.FFME.Windows</PackageId>
-    <PackageVersion>8.1.361-sinaxxr.7</PackageVersion>
-    <Version>8.1.361-sinaxxr.7</Version>
+    <PackageVersion>8.1.361-sinaxxr.8</PackageVersion>
+    <Version>8.1.361-sinaxxr.8</Version>
     <Authors>Sinaxxr (fork of Mario Di Vece et al.)</Authors>
     <Title>FFME: WPF MediaElement Alternative (Sinaxxr fork) — FFmpeg 8 + lifecycle fixes</Title>
     <Description>Fork of Unosquare.FFME upgraded to FFmpeg 8.1 with lifecycle and performance work: ThreadPool-free engine (every worker on a dedicated thread, event-driven command dispatch), DirectSoundPlayer audio output, deterministic teardown, spurious-MediaEnded fix, UI-decoupled video rendering. Native FFmpeg binaries are not included; see repository for installation notes.</Description>
@@ -47,6 +47,7 @@
     <PackageIcon>ffme.png</PackageIcon>
     <PackageTags>ffme hls wpf ffmpeg mediaelement h264 h265 hevc audio video decoding playback frame</PackageTags>
     <PackageReleaseNotes>
+      8.1.361-sinaxxr.8: IsBuffering gains hysteresis. Previously the flag recomputed as "reader wants packets AND queue below full" every buffering-stats update; on local files the packet queue oscillates by one packet around the reader's pause threshold at steady state, flapping IsBuffering (and the BufferingStarted/BufferingEnded events, each a UI-dispatcher post) once per consumed packet — ~17-20 times per second per playing clip, continuously. Buffering now engages only when genuinely starved (sync-buffering or BufferingProgress below 0.5) and releases only when replenished (reader satisfied, or full buffer outside sync-buffering); between thresholds the state holds. Events now mark real starvation boundaries: open, seek/loop flush, actual underruns.
       8.1.361-sinaxxr.7: Command dispatch moves off the ThreadPool. IntervalWorkerBase now runs each worker (CommandManager, log flusher, LegacyAudioPlayer) on its own dedicated AboveNormal thread and the shared StepTimer is deleted — under pool saturation, play/pause/seek dispatch lagged 500+ ms and every 15 ms tick paid one no-op pool dispatch per open element. Play/pause/seek/stop now wake the command thread immediately on enqueue (sub-millisecond dispatch).
       8.1.361-sinaxxr.6: Video render no longer blocks the engine's Highest-priority quantum thread on a synchronous UI dispatch. WriteableBitmap updates post to the dispatcher fire-and-forget (coalesced to one in-flight per renderer); the InteropBitmap renderer stops waiting on its UI invalidation. UI stalls can no longer starve audio feeding, clock updates, or end-of-media detection, and many concurrent elements no longer convoy their render workers on the single dispatcher thread.
       8.1.361-sinaxxr.5: Fix spurious MediaEnded on reused elements. New engine invariant: MediaEnded cannot fire for an open generation that has never rendered a main-component block. An open-generation token invalidates stale queued MediaEnded dispatcher delegates (including their LoopingBehavior Stop/Close actions) across Close/Open, and guards the decode worker's HasDecodingEnded publication against straggler cycles. Consumers no longer need pre-open Stop()+Close() or Seek(0)-after-Open workarounds.

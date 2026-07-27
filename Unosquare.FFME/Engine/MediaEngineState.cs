@@ -14,6 +14,14 @@
     {
         #region Property Backing and Private State
 
+        /// <summary>
+        /// The low-water mark of <see cref="BufferingProgress"/> below which <see cref="IsBuffering"/> engages.
+        /// Exit requires a full (or enough-packets) buffer, giving the transition hysteresis: at steady state
+        /// on local files the packet queue oscillates by one packet around the reader's pause threshold
+        /// (progress ~0.96 to 1.0), which previously flapped IsBuffering once per consumed packet.
+        /// </summary>
+        private const double BufferingLowWaterMark = 0.5d;
+
         private static readonly IReadOnlyDictionary<string, string> EmptyDictionary = new Dictionary<string, string>(0);
 
         private readonly MediaEngine MediaCore;
@@ -784,19 +792,28 @@
             BufferingProgress = bufferCountMax <= 0 ? 0 : Math.Min(1d, (double)bufferCount / bufferCountMax);
             DownloadProgress = Math.Min(1d, (double)bufferLength / MediaEngine.BufferLengthMax);
 
-            // Check if we are currently buffering
-            var isCurrentlyBuffering = MediaCore.ShouldReadMorePackets
-                && (MediaCore.IsSyncBuffering || BufferingProgress < 1d);
+            // Detect a change in buffering state with hysteresis: enter only when genuinely
+            // starved (sync-buffering or below the low-water mark), exit only once the queue is
+            // fully replenished. Between the two thresholds the current state holds.
+            var shouldReadMorePackets = MediaCore.ShouldReadMorePackets;
+            var isSyncBuffering = MediaCore.IsSyncBuffering;
 
-            // Detect and notify a change in buffering state
-            if (isCurrentlyBuffering == IsBuffering)
-                return;
-
-            IsBuffering = isCurrentlyBuffering;
-            if (isCurrentlyBuffering)
-                MediaCore.SendOnBufferingStarted();
+            if (!IsBuffering)
+            {
+                if (shouldReadMorePackets && (isSyncBuffering || BufferingProgress < BufferingLowWaterMark))
+                {
+                    IsBuffering = true;
+                    MediaCore.SendOnBufferingStarted();
+                }
+            }
             else
-                MediaCore.SendOnBufferingEnded();
+            {
+                if (!shouldReadMorePackets || (!isSyncBuffering && BufferingProgress >= 1d))
+                {
+                    IsBuffering = false;
+                    MediaCore.SendOnBufferingEnded();
+                }
+            }
         }
 
         /// <summary>
