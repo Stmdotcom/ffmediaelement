@@ -2,7 +2,6 @@
 
 using System;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -283,8 +282,26 @@ internal abstract class WorkerBase : IWorker
     /// <summary>
     /// Interrupts a cycle or a wait operation.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected void Interrupt() => TokenSource.Cancel();
+    /// <remarks>
+    /// Tolerates a disposed token source: disposal destroys it (<see cref="Dispose(bool)"/>) and
+    /// <see cref="ExecuteCyle"/> swaps-and-disposes it per cancelled cycle, and either can race
+    /// any caller of this method. A disposed source means the worker is already stopping, so
+    /// there is nothing left to interrupt. Before this guard the race escaped as an
+    /// <see cref="ObjectDisposedException"/> out of MediaWorkerSet.PauseAll inside a Close
+    /// command, wedging the command latch (2026-08-27 UI hang). Completes the disposal-guard
+    /// pattern of TryBeginCycle / ExecuteCyle.
+    /// </remarks>
+    protected void Interrupt()
+    {
+        try
+        {
+            TokenSource.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already stopping -- an interrupt is moot by definition.
+        }
+    }
 
     /// <summary>
     /// Tries to acquire a cycle for execution.
@@ -356,8 +373,16 @@ internal abstract class WorkerBase : IWorker
     /// <returns>The awaitable state change task.</returns>
     private Task<WorkerState> RunWaitForWantedState() => Task.Run(() =>
     {
-        while (!WantedStateCompleted.Wait(Constants.DefaultTimingPeriod))
-            Interrupt();
+        try
+        {
+            while (!WantedStateCompleted.Wait(Constants.DefaultTimingPeriod))
+                Interrupt();
+        }
+        catch (ObjectDisposedException)
+        {
+            // A concurrent Dispose destroyed the wait handle -- the same terminal answer as the
+            // identical guard in Dispose(bool): the worker is stopped; report the final state.
+        }
 
         return WorkerState;
     });

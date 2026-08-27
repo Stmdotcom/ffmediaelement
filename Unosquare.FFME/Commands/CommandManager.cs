@@ -281,9 +281,32 @@ namespace Unosquare.FFME.Commands
             // pending close interrupt: the interrupt-close task runs outside
             // PendingDirectCommand, so waiting on IsDirectCommandPending
             // alone let disposal race it into a concurrent double-close.
+            //
+            // BOUNDED: this wait commonly runs on the UI thread (MediaElement.Dispose), and a
+            // command task that faulted without releasing the latch left both flags set with no
+            // thread alive to clear them -- this loop then spun forever (2026-08-27 editor
+            // hang). The latch now releases on every path (ExecuteDirectCommand), so the
+            // deadline is the backstop, not the fix: past it the latch is abandoned by
+            // definition -- reclaim it loudly and run the direct close below. Same 5 s
+            // last-resort escape as WorkerBase.Dispose.
             this.LogDebug(Aspects.EngineCommand, "Dispose is waiting for pending direct commands.");
+            var deadline = Environment.TickCount64 + 5000;
             while (IsDirectCommandPending || IsCloseInterruptPending)
+            {
+                if (Environment.TickCount64 >= deadline)
+                {
+                    this.LogError(
+                        Aspects.EngineCommand,
+                        $"Dispose waited 5 s on abandoned command state (pending: {PendingDirectCommand}, " +
+                        $"close interrupt pending: {IsCloseInterruptPending}). Reclaiming the latch and closing directly.");
+                    PendingDirectCommand = DirectCommandType.None;
+                    HasDirectCommandCompleted.Value = true;
+                    IsCloseInterruptPending = false;
+                    break;
+                }
+
                 Task.Delay(Constants.DefaultTimingPeriod).Wait();
+            }
 
             this.LogDebug(Aspects.EngineCommand, "Dispose is closing media.");
             try

@@ -122,7 +122,21 @@
 
                 PendingDirectCommand = command;
                 HasDirectCommandCompleted.Value = false;
-                MediaCore.PausePlayback();
+
+                try
+                {
+                    MediaCore.PausePlayback();
+                }
+                catch
+                {
+                    // The latch above has no owner yet -- the command task that would release it
+                    // is not even created. Release it before rethrowing, or commanding wedges:
+                    // every later Stop/Close is refused ("command is pending completion") and
+                    // OnDisposing's dispose wait spins on the stale latch.
+                    PendingDirectCommand = DirectCommandType.None;
+                    HasDirectCommandCompleted.Value = true;
+                    throw;
+                }
 
                 var commandTask = new Task<bool>(() =>
                 {
@@ -130,60 +144,77 @@
                     var resumeResult = false;
                     Exception commandException = null;
 
-                    // Cause an immediate packet read abort if we need to close
-                    if (command == DirectCommandType.Close)
-                        MediaCore.Container?.SignalAbortReads(false);
-
-                    // Pause the media core workers
-                    MediaCore.Workers?.PauseAll();
-
-                    // pause the queue processor
-                    PauseAsync().Wait();
-
-                    // clear the command queue and requests
-                    ClearPriorityCommands();
-                    ClearSeekCommands();
-
-                    // execute the command
                     try
                     {
-                        this.LogDebug(Aspects.EngineCommand, $"Direct Command '{command}' entered");
-                        resumeResult = commandDeleagte.Invoke();
-                    }
-                    catch (Exception ex)
-                    {
-                        this.LogError(Aspects.EngineCommand, $"Direct Command '{command}' execution error", ex);
-                        commandException = ex;
-                        commandResult = false;
-                    }
+                        // Cause an immediate packet read abort if we need to close
+                        if (command == DirectCommandType.Close)
+                            MediaCore.Container?.SignalAbortReads(false);
 
-                    // We are done executing -- Update the commanding state
-                    // The post-procesor will use the new IsOpening, IsClosing and IsChanging states
-                    PendingDirectCommand = DirectCommandType.None;
+                        // Pause the media core workers
+                        MediaCore.Workers?.PauseAll();
 
-                    try
-                    {
-                        // Update the sate based on command result
-                        commandResult = PostProcessDirectCommand(command, commandException, resumeResult);
+                        // pause the queue processor
+                        PauseAsync().Wait();
 
-                        // Resume the workers and this processor if we are in the Open state
-                        if (State.IsOpen && commandResult)
+                        // clear the command queue and requests
+                        ClearPriorityCommands();
+                        ClearSeekCommands();
+
+                        // execute the command
+                        try
                         {
-                            // Resume the media core workers
-                            MediaCore.Workers.ResumePaused();
+                            this.LogDebug(Aspects.EngineCommand, $"Direct Command '{command}' entered");
+                            resumeResult = commandDeleagte.Invoke();
+                        }
+                        catch (Exception ex)
+                        {
+                            this.LogError(Aspects.EngineCommand, $"Direct Command '{command}' execution error", ex);
+                            commandException = ex;
+                            commandResult = false;
+                        }
 
-                            // Resume this queue processor
-                            ResumeAsync();
+                        // We are done executing -- Update the commanding state
+                        // The post-procesor will use the new IsOpening, IsClosing and IsChanging states
+                        PendingDirectCommand = DirectCommandType.None;
+
+                        try
+                        {
+                            // Update the sate based on command result
+                            commandResult = PostProcessDirectCommand(command, commandException, resumeResult);
+
+                            // Resume the workers and this processor if we are in the Open state
+                            if (State.IsOpen && commandResult)
+                            {
+                                // Resume the media core workers
+                                MediaCore.Workers.ResumePaused();
+
+                                // Resume this queue processor
+                                ResumeAsync();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            commandResult = false;
+                            this.LogError(Aspects.EngineCommand, $"Direct Command '{command}' postprocessing error", ex);
                         }
                     }
                     catch (Exception ex)
                     {
+                        // Infrastructure fault AROUND the delegate -- e.g. PauseAll throwing while a
+                        // worker is torn down concurrently. Before this catch existed, such a fault
+                        // unwound the task with the latch still set: every later Stop/Close was
+                        // silently refused and MediaElement.Dispose (commonly on the UI thread) spun
+                        // forever in OnDisposing's wait (2026-08-27 editor hang).
                         commandResult = false;
-                        this.LogError(Aspects.EngineCommand, $"Direct Command '{command}' postprocessing error", ex);
+                        this.LogError(Aspects.EngineCommand, $"Direct Command '{command}' infrastructure error", ex);
                     }
                     finally
                     {
-                        // Allow for a new direct command to be processed
+                        // The latch releases on EVERY exit -- success, delegate error, or
+                        // infrastructure fault -- so a failed command can never wedge commanding.
+                        // (The mid-body None assignment above stays: the post-processor reads the
+                        // updated IsOpening/IsClosing/IsChanging states through it.)
+                        PendingDirectCommand = DirectCommandType.None;
                         HasDirectCommandCompleted.Value = true;
                         this.LogDebug(Aspects.EngineCommand, $"Direct Command '{command}' completed. Result: {commandResult}");
                     }
