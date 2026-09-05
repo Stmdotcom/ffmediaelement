@@ -358,37 +358,48 @@ namespace Unosquare.FFME
                 IsStateUpdating = true;
                 while (PropertyUpdates.TryTake(out var p))
                 {
+                    // FileAggregator fork fix: this loop echoes the engine's own state back onto the
+                    // DependencyProperty so a host that reads (rather than binds) these values sees
+                    // them update. A plain property setter is `SetValue` under the hood, which clears
+                    // any active WPF `Binding` on the property permanently — so a host that instead
+                    // *binds* Volume/IsMuted (as FileAggregator's preview pane does) had its binding
+                    // severed the moment either property was ever set even once, since that push
+                    // round-trips through MediaCore.State and back here within one 15ms tick. Every
+                    // branch below now uses SetCurrentValue, which updates the effective value without
+                    // detaching a Binding — the WPF-documented way to let external code and a Binding
+                    // coexist on one property. IsStateUpdating is still true for the whole loop, so the
+                    // coercion callbacks below still short-circuit and don't re-push into MediaCore.State.
                     if (p == nameof(Position) || p == nameof(NaturalDuration))
                     {
                         if (!IsSeeking)
-                            Position = MediaCore.State.Position;
+                            SetCurrentValue(PositionProperty, MediaCore.State.Position);
 
                         NotifyPropertyChangedEvent(nameof(RemainingDuration));
                         NotifyPropertyChangedEvent(nameof(ActualPosition));
                     }
                     else if (p == nameof(Volume))
                     {
-                        Volume = MediaCore.State.Volume;
+                        SetCurrentValue(VolumeProperty, MediaCore.State.Volume);
                     }
                     else if (p == nameof(Balance))
                     {
-                        Balance = MediaCore.State.Balance;
+                        SetCurrentValue(BalanceProperty, MediaCore.State.Balance);
                     }
                     else if (p == nameof(IsMuted))
                     {
-                        IsMuted = MediaCore.State.IsMuted;
+                        SetCurrentValue(IsMutedProperty, MediaCore.State.IsMuted);
                     }
                     else if (p == nameof(ScrubbingEnabled))
                     {
-                        ScrubbingEnabled = MediaCore.State.ScrubbingEnabled;
+                        SetCurrentValue(ScrubbingEnabledProperty, MediaCore.State.ScrubbingEnabled);
                     }
                     else if (p == nameof(VerticalSyncEnabled))
                     {
-                        VerticalSyncEnabled = MediaCore.State.VerticalSyncEnabled;
+                        SetCurrentValue(VerticalSyncEnabledProperty, MediaCore.State.VerticalSyncEnabled);
                     }
                     else if (p == nameof(SpeedRatio))
                     {
-                        SpeedRatio = MediaCore.State.SpeedRatio;
+                        SetCurrentValue(SpeedRatioProperty, MediaCore.State.SpeedRatio);
                     }
 
                     NotifyPropertyChangedEvent(p);
