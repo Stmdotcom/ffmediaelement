@@ -60,6 +60,8 @@
 
         public void Dispose() => Graphics?.Dispose();
 
+        protected override ImageSource GetOwnedVideoSource() => Graphics.CurrentImage;
+
         private void UpdateTargetImage(DispatcherPriority priority)
         {
             // Post — do not wait. The pixel copy already happened on the
@@ -108,6 +110,11 @@
             public InteropBuffer(InteropVideoRenderer parent)
             {
                 Parent = parent;
+            }
+
+            public ImageSource CurrentImage
+            {
+                get { lock (SyncLock) return BackBufferImage; }
             }
 
             public unsafe BitmapDataBuffer Write(VideoBlock block)
