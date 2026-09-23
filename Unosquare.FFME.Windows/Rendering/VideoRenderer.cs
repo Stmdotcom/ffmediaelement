@@ -138,6 +138,8 @@
 
         #endregion
 
+        protected override ImageSource GetOwnedVideoSource() => m_TargetBitmap;
+
         /// <summary>
         /// Initializes the target bitmap if not available and returns a pointer to the back-buffer for filling.
         /// </summary>

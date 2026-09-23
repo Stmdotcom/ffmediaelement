@@ -151,6 +151,10 @@
         /// <inheritdoc />
         public virtual void OnStop() => ClearCaptions();
 
+        /// <summary>Gets the bitmap owned by this renderer when it is closed.</summary>
+        /// <returns>The bitmap owned by this renderer, if any.</returns>
+        protected abstract ImageSource GetOwnedVideoSource();
+
         /// <summary>
         /// Clears the video and captions.
         /// </summary>
@@ -160,11 +164,13 @@
             // Force captions reset in the background so it's the last thing processed.
             ClearCaptions();
 
-            // Force image source refresh in the background so it's the last thing processed.
+            // Capture the closing renderer's bitmap before the deferred clear runs. A new
+            // renderer can attach a different bitmap while this operation is queued.
+            var closingSource = GetOwnedVideoSource();
             VideoDispatcher?.InvokeAsync(() =>
             {
                 var videoView = MediaElement.VideoView;
-                if (videoView != null)
+                if (videoView != null && ReferenceEquals(videoView.Source, closingSource))
                     videoView.Source = null;
             },
             DispatcherPriority.Background);
